@@ -68,11 +68,9 @@ A small helper exists for index-based request/response:
   - Enforces `max_in_flight` backpressure.
   - Expects worker results that contain an index, e.g. `(i, value)`.
 
-## 2. The two “data path” families for ML samples
+## 2. Data path families for ML samples
 
-When integrating with ML frameworks (PyTorch / NumPy / Arrow), the most important performance principle is:
-
-**Do not serialize tensor bytes through a blob codec.**
+When integrating with ML frameworks (PyTorch / NumPy / Arrow), the main guideline is to avoid serializing large array/tensor payloads through a blob codec.
 
 Instead:
 
@@ -81,20 +79,20 @@ Instead:
 
 There are two common ways to model a sample or a batch:
 
-- **Fixed schema** (SoA / stable field set)
-- **Dynamic keys** (dict-of-arrays / nested structures)
+- Fixed schema (SoA / stable field set)
+- Dynamic keys (dict-of-arrays / nested structures)
 
-## 3. Fixed schema path (recommended for throughput)
+## 3. Fixed schema path
 
 ### 3.1 When to use
 
-Use fixed schema when:
+Use a fixed schema when:
 
 - Your model input signature is stable (e.g. `input_ids`, `attention_mask`, `labels`).
 - Keys and shapes are predictable.
 - You want maximal throughput and minimal per-sample overhead.
 
-### 3.2 Representation: SoA
+### 3.2 Representation (SoA)
 
 A fixed schema is naturally represented as a struct-of-arrays (SoA):
 
@@ -151,7 +149,7 @@ In this model, “marshalling” is minimal:
 - Pass a small descriptor.
 - Interpret typed views using dtype/shape.
 
-## 4. Dynamic keys path (flexible / prototyping)
+## 4. Dynamic keys path
 
 ### 4.1 When to use
 
@@ -176,10 +174,10 @@ This is fine for:
 
 This is not ideal when the dict contains large arrays.
 
-#### B) Metadata blob + shm handles for arrays (recommended dynamic path)
+#### B) Metadata blob + shm handles for arrays
 
 - For each array/tensor-like field, allocate bytes in shared memory and produce a `Handle`.
-- Build a **metadata object** that maps keys to handle info + dtype/shape.
+- Build a metadata object that maps keys to handle info plus dtype/shape.
 - Encode only the metadata (small) via `msgspec` (preferred) or JSON.
 
 Example metadata shape:
@@ -194,10 +192,7 @@ sample_desc = {
 }
 ```
 
-This yields:
-
-- flexibility of dynamic keys
-- zero-copy semantics for large buffers
+This supports dynamic keys while keeping large buffers in shared memory.
 
 Codec recommendation:
 
@@ -237,11 +232,11 @@ The same request/response machinery works if IO is cheap and you only want to of
 
 The difference between “IO in main” vs “IO in workers” is primarily **what the request payload contains**, not the transport substrate.
 
-## 6. Summary / recommendations
+## 6. Summary
 
-- Prefer **fixed schema / SoA** when you want maximal throughput and predictable training inputs.
-- Prefer **dynamic keys** when you need flexibility, but do not serialize tensor bytes.
-- Use codecs only for **small metadata**, not for the bulk numeric buffers.
+- Prefer fixed schema / SoA when you want maximal throughput and predictable training inputs.
+- Use dynamic keys when you need flexibility, but keep tensor/array bytes in shared memory.
+- Use codecs only for small metadata, not for the bulk numeric buffers.
 - Use `IndexRequestor` for map-style request/response patterns.
 - For PyTorch integration, prefer `DataLoader(..., num_workers=0)` when oxidata manages worker processes.
 
@@ -257,9 +252,9 @@ This section ties the two “data path” families to the concrete dataloader su
 
 This is the most direct “fixed schema” mapping when each sample is a single fixed-shape array (or you can pack multiple fields into one fixed tensor).
 
-Properties:
+Notes:
 
-- **No per-sample codec cost** for the array bytes.
+- No per-sample codec cost for the array bytes.
 - Only the handle tuple crosses the ring.
 - Worker reconstructs an `ndarray` view and runs `fn_arr`.
 
@@ -351,6 +346,4 @@ Where the array bytes live:
 - If your sample is multiple arrays with a stable signature: use SoA and pass a small descriptor.
 - If your sample is a dict-of-arrays with dynamic keys: use a “multi-handle descriptor” and encode metadata with `msgspec`.
 
-In all cases, keep the invariant:
-
-**Codec is for metadata only; bulk numeric buffers should remain in shared memory and be referenced by handles.**
+In all cases, keep the invariant: codecs are for metadata only; bulk numeric buffers should remain in shared memory and be referenced by handles.

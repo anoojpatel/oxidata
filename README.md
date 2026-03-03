@@ -1,10 +1,10 @@
 # Oxidata
 
-Oxidata is a Python toolkit for building fast **zero-copy / low-copy** data structures and multiprocessing pipelines on top of **POSIX shared memory**, with runtime-enforced **lifetime and borrowing discipline**.
+Oxidata is a Python toolkit for building fast zero-copy / low-copy data structures and multiprocessing pipelines on top of POSIX shared memory, with runtime-enforced lifetime and borrowing discipline.
 
 ## Where it fits
 
-Oxidata fits best when you want **multi-process concurrency** but don’t want the default Python story of:
+Oxidata is intended for workloads that need multi-process concurrency but do not want the default Python behavior of:
 
 - copying large payloads between processes
 - pickling/unpickling (and the associated CPU + allocation overhead)
@@ -12,36 +12,36 @@ Oxidata fits best when you want **multi-process concurrency** but don’t want t
 
 Practically, it’s a substrate for:
 
-- **ML input pipelines** that need to move batches/tensors efficiently across process boundaries
-- **producer/consumer systems** that want to pass lightweight references (handles) instead of bytes
-- **shared off-heap caches** where you want “immutable-after-publish” semantics
+- ML input pipelines that need to move batches/tensors efficiently across process boundaries
+- producer/consumer systems that pass lightweight references (handles) instead of bytes
+- shared off-heap caches that use immutable-after-publish semantics
 
 ## What it improves over basic Python
 
-Compared to `multiprocessing.Queue` / Pipes / Manager objects (which primarily move Python objects via pickle):
+Compared to `multiprocessing.Queue` / pipes / manager objects (which primarily move Python objects via pickle):
 
-- **Performance**
+- Performance
   - avoids repeated pickling/unpickling of large arrays/tensors
-  - shifts transfer to shared memory + small handle messages
+  - shifts transfer to shared memory plus small handle messages
   - optional native ring buffer and GIL-released shared-memory copies
 
-- **Ergonomics / safety**
-  - provides “scoped” lifetimes (`Frame`) and attachable global segments (`GlobalSegment`)
-  - borrow/freeze patterns make it harder to accidentally mutate shared buffers or use-after-free
+- Ergonomics and safety
+  - scoped lifetimes (`Frame`) and attachable global segments (`GlobalSegment`)
+  - borrow/freeze patterns to reduce accidental mutation and use-after-free
 
 ## How it compares to common alternatives
 
-- **vs PyTorch `DataLoader` multiprocessing**
-  - Oxidata focuses on the *transport substrate* (shared-memory handles + ring + slots) and can back a map-style dataset adapter.
-  - It’s a good fit when the bottleneck is **serialization and copying** of large samples/batches.
+- vs PyTorch `DataLoader` multiprocessing
+  - Oxidata focuses on the transport substrate (shared-memory handles, ring, and slots) and can back a map-style dataset adapter.
+  - It is a good fit when the bottleneck is serialization and copying of large samples/batches.
 
-- **vs using `multiprocessing.shared_memory` directly**
+- vs using `multiprocessing.shared_memory` directly
   - Oxidata adds reusable building blocks: arenas, handles, scoped lifetimes, publish/freeze discipline, worker-pool substrate.
-  - It reduces the amount of ad-hoc offset bookkeeping you have to write.
+  - It reduces ad-hoc offset bookkeeping.
 
-- **vs Arrow-style columnar formats / Plasma-like object stores**
-  - Arrow is excellent for standardized columnar interchange.
-  - Oxidata is targeted at **tight inner-loop pipelines** where you want explicit control over allocation, mutability, and lifetimes, and you want to pass handles through a ring quickly.
+- vs Arrow-style columnar formats / Plasma-like object stores
+  - Arrow is well-suited to standardized columnar interchange.
+  - Oxidata targets tight inner-loop pipelines where you want explicit control over allocation, mutability, and lifetimes, and you want to pass handles through a ring quickly.
 
 It’s designed for workloads like:
 
@@ -51,24 +51,24 @@ It’s designed for workloads like:
 
 ## What it provides
 
-- **Shared memory arena + handles**
+- Shared memory arena and handles
   - `SharedMemoryArena` allocates/attaches shared memory segments.
   - `Handle` references `(shm_name, offset, nbytes, kind)` so processes can exchange small metadata rather than big payloads.
   - Attach ergonomics: attaching infers size from the OS mapping (`size=None` when `create=False`).
 
-- **Runtime lifetimes + borrowing (safety for off-heap memory)**
+- Runtime lifetimes and borrowing (safety for off-heap memory)
   - `Owned[T]` values can be borrowed immutably or mutably via context managers.
   - `Frame` and `GlobalSegment` provide ergonomic “scoped” and “named global” shared-memory lifetimes.
   - Publish/freeze patterns support “immutable-after-publish”.
 
-- **Zero-copy-ish multiprocessing dataloader substrate**
+- Multiprocessing dataloader substrate
   - A native shared-memory ring buffer transports *handle tuples*.
   - A slot arena stores payload bytes/arrays in shared memory.
   - `Producer` publishes bytes/blobs/fixed-shape arrays.
   - `WorkerPool`, `BlobWorkerPool`, `ArrayWorkerPool` attach in workers and execute your function.
   - `IndexRequestor` supports map-style request/response (buffering out-of-order results).
 
-- **Struct-of-arrays (SoA) utilities**
+- Struct-of-arrays (SoA) utilities
   - `SoASchema` / `SoABatch` help represent fixed-schema data as columnar arrays.
 
 ## Documentation

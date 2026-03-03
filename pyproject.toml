@@ -22,4 +22,4 @@ dev = ["maturin>=1.5,<2.0"]
 dev-dependencies = ["maturin>=1.5,<2.0", "numpy>=1.23", "msgspec>=0.18"]
 
 [tool.setuptools]
-packages = ["pyocaml", "oxideflow", "oxidata"]
+packages = ["oxidata"]

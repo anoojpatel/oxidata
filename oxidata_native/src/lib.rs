@@ -407,7 +407,7 @@ impl RwBytes {
 }
 
 #[pymodule]
-fn pyocaml_native(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn oxidata_native(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AtomicI64>()?;
     m.add_class::<RwBytes>()?;
     m.add_class::<ShmRingBuffer>()?;
