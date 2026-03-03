@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.dylib
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Test / coverage
+.coverage
+.pytest_cache/
+
+# uv
+.uv/
+uv.lock
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Rust / PyO3 / maturin
+pyocaml_native/target/
+target/
+Cargo.lock
+*.rlib
+
+# Maturin outputs / wheels
+*.whl

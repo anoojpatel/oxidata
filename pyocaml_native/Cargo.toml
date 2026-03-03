@@ -1,0 +1,12 @@
+[package]
+name = "pyocaml_native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "pyocaml_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.21", features = ["extension-module"] }
+libc = "0.2"
