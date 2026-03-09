@@ -90,7 +90,7 @@ uv pip install -e .
 
 ```bash
 uv pip install maturin
-maturin develop -m pyocaml_native/pyproject.toml
+maturin develop -m oxidata_native/pyproject.toml
 ```
 
 The native extension enables:
