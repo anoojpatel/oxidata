@@ -19,6 +19,10 @@ class OpenedRegion:
 
     def close(self) -> None:
         try:
+            self.view.release()
+        except Exception:
+            pass
+        try:
             self.shm.close()
         except Exception:
             pass
@@ -81,6 +85,10 @@ def borrow_region(owned_handle: Owned[Handle]) -> Iterator[OpenedRegion]:
             yield OpenedRegion(view=mv, shm=shm)
         finally:
             try:
+                mv.release()
+            except Exception:
+                pass
+            try:
                 shm.close()
             except Exception:
                 pass
@@ -95,6 +103,10 @@ def borrow_region_mut(owned_handle: Owned[Handle]) -> Iterator[OpenedRegion]:
         try:
             yield OpenedRegion(view=mv, shm=shm)
         finally:
+            try:
+                mv.release()
+            except Exception:
+                pass
             try:
                 shm.close()
             except Exception:

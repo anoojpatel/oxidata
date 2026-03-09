@@ -8,7 +8,7 @@ from oxidata.mp import read_handle_bytes
 
 def main():
     if not native_available():
-        raise SystemExit("pyocaml_native not built")
+        raise SystemExit("native extension not built")
 
     codec = codec_by_name("json")
     seg = GlobalSegment.create("oxidata-rcu-demo", size=32 * 1024 * 1024)

@@ -5,6 +5,7 @@ from .shm_arena import SharedMemoryArena, Handle
 from .blob_codec import Codec, JsonCodec, MsgspecJsonCodec, alloc_object, open_object, codec_by_name
 from .soa import SoASchema, SoABatchHandle, SoABatch
 from .mp import OpenedView, open_handle_view, read_handle_bytes, open_handle_numpy
+from .torch_stage import torch_available, tensor_tree_to_torch, pin_memory_tree, stage_tree_to_device
 from .offheap import (
     OffHeapScope,
     OpenedRegion,
@@ -26,7 +27,19 @@ from .native import (
     handle_write,
     ShmRingBuffer,
 )
-from .dataloader import Producer, WorkerPool, BlobWorkerPool, ArrayWorkerPool, SlotArena, HandleMsg
+from .dataloader import (
+    Producer,
+    WorkerPool,
+    BlobWorkerPool,
+    ArrayWorkerPool,
+    TensorTreeProducer,
+    TensorTreeWorkerPool,
+    TensorSampleProducer,
+    TensorSampleWorkerPool,
+    SlotArena,
+    HandleMsg,
+    TensorTreeDescriptor,
+)
 from .scopes import Frame, GlobalSegment, Published
 
 __version__ = "0.1.0"
@@ -60,6 +73,10 @@ __all__ = [
     "open_handle_view",
     "read_handle_bytes",
     "open_handle_numpy",
+    "torch_available",
+    "tensor_tree_to_torch",
+    "pin_memory_tree",
+    "stage_tree_to_device",
     "OffHeapScope",
     "OpenedRegion",
     "borrow_region",
@@ -81,8 +98,13 @@ __all__ = [
     "WorkerPool",
     "BlobWorkerPool",
     "ArrayWorkerPool",
+    "TensorTreeProducer",
+    "TensorTreeWorkerPool",
+    "TensorSampleProducer",
+    "TensorSampleWorkerPool",
     "SlotArena",
     "HandleMsg",
+    "TensorTreeDescriptor",
     "Frame",
     "GlobalSegment",
     "Published",

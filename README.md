@@ -64,8 +64,10 @@ It’s designed for workloads like:
 - Multiprocessing dataloader substrate
   - A native shared-memory ring buffer transports *handle tuples*.
   - A slot arena stores payload bytes/arrays in shared memory.
-  - `Producer` publishes bytes/blobs/fixed-shape arrays.
+  - `TensorSampleProducer` is the recommended path for nested tensor-like samples with NumPy leaves.
+  - `Producer` publishes bytes/blobs/fixed-shape arrays for lower-level or fallback usage.
   - `WorkerPool`, `BlobWorkerPool`, `ArrayWorkerPool` attach in workers and execute your function.
+  - `TensorSampleWorkerPool` reconstructs nested shared-memory-backed array views in workers.
   - `IndexRequestor` supports map-style request/response (buffering out-of-order results).
 
 - Struct-of-arrays (SoA) utilities
@@ -80,17 +82,17 @@ It’s designed for workloads like:
 
 
 
-## Install (pure Python)
+## Install with uv
 
 ```bash
-uv pip install -e .
+uv venv --python 3.12
+uv sync
 ```
 
 ## Build native extension
 
 ```bash
-uv pip install maturin
-maturin develop -m oxidata_native/pyproject.toml
+uv run maturin develop --manifest-path oxidata_native/Cargo.toml
 ```
 
 The native extension enables:
@@ -103,12 +105,112 @@ If the native extension isn’t built, some multiprocessing pipeline features wi
 ## Run tests
 
 ```bash
-python3 -m unittest
+uv run python -m unittest discover -s tests -v
 ```
 
 ## Quick start
 
 See `examples/`, `usecases/`, and `benchmarks/`.
+
+### Recommended Path: nested tensor-like sample transport
+
+```python
+from oxidata.dataloader import TensorSampleProducer, TensorSampleWorkerPool
+
+def fn_sample(sample):
+    return int(sample["tokens"].sum())
+
+producer = TensorSampleProducer(ring_name="oxidata-tree-ring")
+pool = TensorSampleWorkerPool(
+    metadata_shm_name=producer.metadata_shm_name,
+    ring_name=producer.ring_name,
+    fn_sample=fn_sample,
+    ack_queue=producer.ack_queue,
+)
+```
+
+This is the intended deep-learning path:
+
+- NumPy leaves stay in shared memory.
+- `msgspec_json`/JSON carries only small descriptors.
+- Workers operate on array views, not Python blobs.
+- One sample may span multiple payload slots.
+- Important limit: each individual tensor leaf must currently fit within one payload slot.
+- Torch conversion and CPU-to-GPU staging happen explicitly after worker reconstruction.
+
+Blob transport remains available as a compatibility fallback when a sample cannot be described cleanly as metadata plus array leaves.
+
+Warning:
+
+- If a single tensor leaf is larger than `payload_slot_size`, `TensorSampleProducer` raises `MemoryError`.
+- Multi-slot support currently applies across leaves within a sample, not within one leaf.
+- If your workload has single leaves larger than a practical slot size, the next required feature is segmented-leaf descriptors.
+
+### Torch staging
+
+If workers reconstruct NumPy-backed tensor samples in shared memory, you can stage them explicitly:
+
+```python
+from oxidata import tensor_tree_to_torch, pin_memory_tree, stage_tree_to_device
+
+cpu_tree = tensor_tree_to_torch(sample, pin_memory=True)
+gpu_tree = stage_tree_to_device(cpu_tree, "cuda", non_blocking=True)
+```
+
+Notes:
+
+- `tensor_tree_to_torch(..., pin_memory=True)` is the intended pinned-host-memory path when PyTorch is available.
+- GPU transfer is still expected for training workloads; the goal is to avoid extra CPU copies before that transfer.
+
+## Benchmarks
+
+Measured on this machine:
+
+- MacBook Pro `MacBookPro18,1`
+- Apple M1 Pro, `10` CPU cores
+- `16 GB` unified memory
+
+Transport-path results from `benchmarks/bench_payload_matrix.py`:
+
+| Payload | `mp.Queue` msg/s | `slot+ring+copy` msg/s | `slot+ring+view` msg/s |
+|---|---:|---:|---:|
+| 64 B | 116931 | 39013 | 98217 |
+| 256 B | 88669 | 43522 | 72061 |
+| 1 KiB | 56120 | 33434 | 57091 |
+| 4 KiB | 55268 | 31119 | 59859 |
+| 16 KiB | 15420 | 10214 | 10332 |
+| 64 KiB | 11849 | 9137 | 11905 |
+| 256 KiB | 3046 | 2440 | 2757 |
+| 1 MiB | 686 | 496 | 637 |
+| 4 MiB | 139 | 145 | 182 |
+| 100 MiB | 7 | 8 | 11 |
+
+Metadata-codec results from the same benchmark:
+
+| Descriptor context | `json` ops/s | `msgspec_json` ops/s |
+|---|---:|---:|
+| 64 B payload descriptor | 52446 | 51940 |
+| 256 B payload descriptor | 47309 | 58281 |
+| 1 KiB payload descriptor | 43569 | 56615 |
+| 4 KiB payload descriptor | 29953 | 48861 |
+| 16 KiB payload descriptor | 12661 | 35996 |
+| 64 KiB payload descriptor | 3857 | 16347 |
+| 256 KiB payload descriptor | 1061 | 5862 |
+| 1 MiB payload descriptor | 271 | 1610 |
+| 4 MiB payload descriptor | 63 | 401 |
+| 100 MiB payload descriptor | 2 | 13 |
+
+Interpretation:
+
+- `slot+ring+copy` is not the target deep-learning path; it copies payloads back into Python-owned bytes in the worker.
+- `slot+ring+view` is the meaningful shared-memory result. It is competitive or better once the worker stays attached and operates on shared-memory views.
+- `json` and `msgspec_json` here measure descriptor metadata roundtrip only, not bulk tensor transport.
+- `msgspec_json` is the intended metadata codec because it is faster on structured descriptors while tensor bytes stay in shared memory.
+
+Other benchmark results on the same machine:
+
+- `benchmarks/bench_native_ringbuffer.py`: `322946 msg/s`
+- `benchmarks/bench_blob_vs_pickle.py`: `pickle 0.0044s`, `shm+json 0.0208s`, `shm+msgspec 0.0081s` for `200` iterations
 
 ### Example: scoped off-heap bytes with `Frame`
 
@@ -153,6 +255,11 @@ try:
 finally:
     producer.cleanup()
 ```
+
+Notes:
+
+- Worker callbacks run in spawned subprocesses. Top-level functions are safest.
+- Closure-free Python functions also work; closures are not supported.
 
 ### Example: PyTorch map-style dataset adapter
 

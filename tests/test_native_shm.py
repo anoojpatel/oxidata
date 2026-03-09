@@ -14,7 +14,7 @@ class TestNativeShm(unittest.TestCase):
 
         arena = SharedMemoryArena(size=4096)
         try:
-            h = arena.alloc_bytes(b"" * 16, kind="bytes")
+            h = arena.alloc_bytes(b"\x00" * 16, kind="bytes")
             # overwrite using native write
             n = handle_write(h, b"hello-native")
             self.assertGreaterEqual(n, 5)
@@ -22,7 +22,7 @@ class TestNativeShm(unittest.TestCase):
             out = bytearray(16)
             n2 = handle_readinto(h, out, 0, 16)
             self.assertGreaterEqual(n2, 5)
-            self.assertEqual(bytes(out[:11]), b"hello-native")
+            self.assertEqual(bytes(out[:12]), b"hello-native")
         finally:
             arena.close()
             arena.unlink()

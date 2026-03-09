@@ -13,6 +13,19 @@ class ArenaClosed(RuntimeError):
     pass
 
 
+class _OpenedSharedMemory:
+    def __init__(self, shm: shared_memory.SharedMemory, view: memoryview):
+        self._shm = shm
+        self._view = view
+
+    def close(self) -> None:
+        self._view.release()
+        self._shm.close()
+
+    def unlink(self) -> None:
+        self._shm.unlink()
+
+
 @dataclass(frozen=True)
 class Handle:
     shm_name: str
@@ -31,7 +44,8 @@ class SharedMemoryArena:
         self._closed = False
 
         if name is None:
-            name = f"oxidata-{os.getpid()}-{uuid.uuid4().hex}"
+            # Keep names short enough for macOS POSIX shared memory limits.
+            name = f"oxd-{os.getpid():x}-{uuid.uuid4().hex[:8]}"
 
         if create:
             if size is None:
@@ -119,9 +133,10 @@ class SharedMemoryArena:
             n = min(int(nbytes), self._size - int(offset))
             return self._shm.buf[int(offset) : int(offset) + n]
 
-    def open_view(self, h: Handle) -> Tuple[memoryview, shared_memory.SharedMemory]:
+    def open_view(self, h: Handle) -> Tuple[memoryview, _OpenedSharedMemory]:
         shm = shared_memory.SharedMemory(name=h.shm_name, create=False)
-        return shm.buf[h.offset : h.offset + h.nbytes], shm
+        view = shm.buf[h.offset : h.offset + h.nbytes]
+        return view, _OpenedSharedMemory(shm, view)
 
     def read_bytes(self, h: Handle) -> bytes:
         shm = shared_memory.SharedMemory(name=h.shm_name, create=False)

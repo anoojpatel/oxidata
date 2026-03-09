@@ -9,12 +9,13 @@ class NativeNotAvailable(RuntimeError):
 
 
 def _try_import_native():
-    try:
-        import pyocaml_native as _native  # type: ignore
-
-        return _native
-    except Exception:
-        return None
+    for module_name in ("pyocaml_native", "oxidata_native.oxidata_native"):
+        try:
+            module = __import__(module_name, fromlist=["*"])
+            return module
+        except Exception:
+            continue
+    return None
 
 
 _native = _try_import_native()
@@ -27,7 +28,7 @@ def available() -> bool:
 def require_native():
     if _native is None:
         raise NativeNotAvailable(
-            "pyocaml_native extension is not available. Build it with maturin (see pyocaml_native/)."
+            "native extension is not available. Build it with `uv run maturin develop --manifest-path oxidata_native/Cargo.toml`."
         )
     return _native
 

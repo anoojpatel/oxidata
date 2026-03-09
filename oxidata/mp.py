@@ -14,6 +14,10 @@ class OpenedView:
 
     def close(self) -> None:
         try:
+            self.view.release()
+        except Exception:
+            pass
+        try:
             self.shm.close()
         except Exception:
             pass

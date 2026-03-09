@@ -31,7 +31,7 @@ def main():
     from oxidata.shm_arena import SharedMemoryArena
 
     if not native_available():
-        raise SystemExit("pyocaml_native not built")
+        raise SystemExit("native extension not built")
 
     ctx = mp.get_context("spawn")
 

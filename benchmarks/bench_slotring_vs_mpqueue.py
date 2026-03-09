@@ -59,7 +59,7 @@ def bench_slotring(payload_size: int = 1024, n_msgs: int = 50_000) -> float:
     from oxidata.native import available as native_available
 
     if not native_available():
-        raise SystemExit("pyocaml_native not built")
+        raise SystemExit("native extension not built")
 
     from oxidata.dataloader import Producer
 

@@ -253,7 +253,7 @@ impl ShmRingBuffer {
     }
 
     fn pop_handle(&self, py: Python<'_>) -> PyResult<Option<(u64, u64, u32)>> {
-        let out = PyByteArray::new_bound(py, 24);
+        let out = PyByteArray::new_bound(py, &[0u8; 24]);
         let n = self.pop_into(py, &out, 0)?;
         if n == 0 {
             return Ok(None);
@@ -262,7 +262,7 @@ impl ShmRingBuffer {
             return Ok(None);
         }
 
-        let bytes = unsafe { std::slice::from_raw_parts(out.as_ptr(), n) };
+        let bytes = unsafe { &out.as_bytes()[..n] };
         let mut a = [0u8; 8];
         a.copy_from_slice(&bytes[0..8]);
         let offset = u64::from_le_bytes(a);
@@ -279,6 +279,7 @@ impl ShmRingBuffer {
         if out_offset > out_len {
             return Ok(0);
         }
+        let dst = unsafe { out.data().add(out_offset) as usize };
 
         let copied = py.allow_threads(|| unsafe {
             let hdr = &*(self.base as *const RingHeader);
@@ -299,8 +300,7 @@ impl ShmRingBuffer {
             let max_out = out_len - out_offset;
             let take = std::cmp::min(n, max_out);
             let src = p.add(8);
-            let dst = out.as_ptr().add(out_offset);
-            std::ptr::copy_nonoverlapping(src, dst, take);
+            std::ptr::copy_nonoverlapping(src, dst as *mut u8, take);
             hdr.head.store(head.wrapping_add(1), Ordering::Release);
             take
         });
@@ -375,6 +375,7 @@ impl RwBytes {
 
     fn readinto(&self, py: Python<'_>, out: &Bound<'_, PyByteArray>, offset: usize) -> PyResult<usize> {
         let out_len = out.len();
+        let dst = out.data() as usize;
         let copied = py.allow_threads(|| {
             let guard = self.inner.read().unwrap();
             if offset >= guard.len() {
@@ -384,7 +385,7 @@ impl RwBytes {
             let n = std::cmp::min(out_len, max_n);
             let src = &guard[offset..offset + n];
             unsafe {
-                std::ptr::copy_nonoverlapping(src.as_ptr(), out.as_ptr(), n);
+                std::ptr::copy_nonoverlapping(src.as_ptr(), dst as *mut u8, n);
             }
             n
         });
@@ -428,6 +429,7 @@ fn oxidata_native(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
         let max_out = out_len - out_offset;
         let want = nbytes.unwrap_or(max_out);
         let want = std::cmp::min(want, max_out);
+        let dst = unsafe { out.data().add(out_offset) as usize };
 
         let copied = py.allow_threads(|| unsafe {
             let (ptr, len, fd) = mmap_shm_ro(shm_name).map_err(|e| e)?;
@@ -437,8 +439,7 @@ fn oxidata_native(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
                 let max_n = len - offset;
                 let n = std::cmp::min(want, max_n);
                 let src = (ptr as *const u8).add(offset);
-                let dst = out.as_ptr().add(out_offset);
-                std::ptr::copy_nonoverlapping(src, dst, n);
+                std::ptr::copy_nonoverlapping(src, dst as *mut u8, n);
                 n
             };
             munmap_close(ptr, len, fd);

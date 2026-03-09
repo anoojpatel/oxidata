@@ -24,7 +24,7 @@ def borrow_mut(owned: Owned[T]) -> Borrow[T]:
 
 
 def run(gen: Generator[Any, Any, R]) -> R:
-    stack = []
+    stack: list[tuple[Any, bool]] = []
     sent: Any = None
     try:
         while True:
@@ -34,19 +34,25 @@ def run(gen: Generator[Any, Any, R]) -> R:
                 return e.value  # type: ignore[return-value]
 
             if isinstance(req, Borrow):
+                if stack:
+                    prev, prev_mutable = stack[-1]
+                    if prev_mutable:
+                        prev, _ = stack.pop()
+                        prev.__exit__(None, None, None)
+
                 if req.mutable:
                     cm = req.owned.borrow_mut()
                 else:
                     cm = req.owned.borrow()
 
                 borrowed = cm.__enter__()
-                stack.append(cm)
+                stack.append((cm, req.mutable))
                 sent = borrowed
             else:
                 raise TypeError(f"unhandled effect request: {type(req)!r}")
     finally:
         while stack:
-            cm = stack.pop()
+            cm, _ = stack.pop()
             try:
                 cm.__exit__(None, None, None)
             except Exception:

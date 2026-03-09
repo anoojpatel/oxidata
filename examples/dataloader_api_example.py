@@ -5,7 +5,7 @@ def main():
     from oxidata.native import available as native_available
 
     if not native_available():
-        raise SystemExit("pyocaml_native not built")
+        raise SystemExit("native extension not built")
 
     from oxidata.dataloader import Producer, WorkerPool
 

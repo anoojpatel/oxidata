@@ -242,6 +242,25 @@ The difference between “IO in main” vs “IO in workers” is primarily **wh
 
 ## 7. Addendum: how these paths map onto the current `oxidata.dataloader` APIs
 
+This section ties the two “data path” families to the concrete dataloader substrate you have today.
+
+Recommended default for deep learning workloads:
+
+- `TensorSampleProducer`
+- `TensorSampleWorkerPool`
+- `msgspec_json` descriptors for metadata only
+- explicit torch staging (`tensor_tree_to_torch`, `pin_memory_tree`, `stage_tree_to_device`) after worker reconstruction
+- samples may span multiple payload slots
+- hard current limit: each individual tensor leaf must fit within one payload slot
+
+Use blob transport only as fallback when a sample cannot be described cleanly as metadata plus array leaves.
+
+This limit matters:
+
+- multi-slot support currently distributes different leaves of the same sample across slots
+- a single oversized leaf is rejected rather than fragmented
+- if one tensor leaf exceeds `payload_slot_size`, the next required extension is segmented-leaf descriptors
+
 This section ties the two “data path” families to the concrete dataloader substrate you have today:
 
 - `Producer` + `ShmRingBuffer` for transport
@@ -347,3 +366,43 @@ Where the array bytes live:
 - If your sample is a dict-of-arrays with dynamic keys: use a “multi-handle descriptor” and encode metadata with `msgspec`.
 
 In all cases, keep the invariant: codecs are for metadata only; bulk numeric buffers should remain in shared memory and be referenced by handles.
+
+## 8. Benchmark notes (local development machine)
+
+Recent benchmark runs on:
+
+- MacBook Pro `MacBookPro18,1`
+- Apple M1 Pro
+- 10 CPU cores
+- 16 GB unified memory
+
+Transport-path highlights:
+
+| Payload | `mp.Queue` msg/s | `slot+ring+copy` msg/s | `slot+ring+view` msg/s |
+|---|---:|---:|---:|
+| 64 B | 116931 | 39013 | 98217 |
+| 256 B | 88669 | 43522 | 72061 |
+| 1 KiB | 56120 | 33434 | 57091 |
+| 64 KiB | 11849 | 9137 | 11905 |
+| 1 MiB | 686 | 496 | 637 |
+| 4 MiB | 139 | 145 | 182 |
+| 100 MiB | 7 | 8 | 11 |
+
+Metadata-codec highlights from the same benchmark:
+
+| Descriptor context | `json` ops/s | `msgspec_json` ops/s |
+|---|---:|---:|
+| 64 B payload descriptor | 52446 | 51940 |
+| 256 B payload descriptor | 47309 | 58281 |
+| 1 KiB payload descriptor | 43569 | 56615 |
+| 64 KiB payload descriptor | 3857 | 16347 |
+| 1 MiB payload descriptor | 271 | 1610 |
+| 100 MiB payload descriptor | 2 | 13 |
+
+Interpretation:
+
+- the meaningful shared-memory comparison is `slot+ring+view`, not `slot+ring+copy`
+- the copy variant still pays a worker-side materialization cost back into Python-owned memory
+- the view variant is the closest measurement of the intended tensor-first path
+- the codec table is a metadata-only measurement; it should not be read as a bulk tensor transport benchmark
+- GPU transfer is still expected after this stage; these numbers are about CPU-side transport and staging only

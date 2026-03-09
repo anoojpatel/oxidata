@@ -4,7 +4,7 @@ from oxidata.shm_arena import SharedMemoryArena
 
 def main():
     if not native_available():
-        raise SystemExit("pyocaml_native not built")
+        raise SystemExit("native extension not built")
 
     arena = SharedMemoryArena(size=4096)
     try:
