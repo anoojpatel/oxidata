@@ -94,7 +94,7 @@ class TorchTensorDataset(Dataset):
         return self.data[int(idx)]
 
 
-class TorchSerializedList(Dataset):
+class TorchSerializedFullSampleDataset(Dataset):
     def __init__(self, data: list[Any]):
         payloads = [pickle.dumps(x, protocol=pickle.HIGHEST_PROTOCOL) for x in data]
         sizes = [len(x) for x in payloads]
@@ -246,7 +246,7 @@ def main():
         methods = [
             ("python_list", PythonListDataset(data)),
             ("torch_tensors", TorchTensorDataset(data)),
-            ("torch_serialize", TorchSerializedList(data)),
+            ("torch_serialize_full", TorchSerializedFullSampleDataset(data)),
             ("oxidata_descriptors", OxidataDescriptorDataset(data)),
         ]
 

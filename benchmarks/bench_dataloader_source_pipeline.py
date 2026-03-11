@@ -111,6 +111,43 @@ class StreamingTorchFileDataset(Dataset):
         return _tree_numpy_to_torch(_read_sample_file(self.paths[int(idx)], sleep_ms=self.sleep_ms))
 
 
+class TorchSerializedList:
+    """Faithful to the blog/detectron2 dataset-sharing trick."""
+
+    def __init__(self, items: list[Any]):
+        payloads = [np.frombuffer(pickle.dumps(x, protocol=pickle.HIGHEST_PROTOCOL), dtype=np.uint8) for x in items]
+        self._addr = torch.from_numpy(np.cumsum(np.asarray([len(x) for x in payloads], dtype=np.int64)))
+        self._blob = torch.from_numpy(np.concatenate(payloads))
+
+    def __len__(self) -> int:
+        return int(self._addr.numel())
+
+    def __getitem__(self, idx: int) -> Any:
+        idx = int(idx)
+        start = 0 if idx == 0 else int(self._addr[idx - 1].item())
+        end = int(self._addr[idx].item())
+        return pickle.loads(memoryview(self._blob[start:end].numpy()))
+
+
+class StreamingTorchSerializedIndexDataset(Dataset):
+    """
+    Closer to the blog's intended use than full-sample serialization: the source
+    index/metadata is torch-serialized once, and the real sample payload is still
+    read in workers.
+    """
+
+    def __init__(self, paths: list[Path], *, sleep_ms: int):
+        self.records = TorchSerializedList([{"path": str(p), "sample_id": i} for i, p in enumerate(paths)])
+        self.sleep_ms = int(sleep_ms)
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, idx: int) -> Any:
+        record = self.records[int(idx)]
+        return _tree_numpy_to_torch(_read_sample_file(Path(record["path"]), sleep_ms=self.sleep_ms))
+
+
 class PythonListDataset(Dataset):
     def __init__(self, data: list[Any]):
         self.data = data
@@ -133,7 +170,7 @@ class TorchTensorDataset(Dataset):
         return self.data[int(idx)]
 
 
-class TorchSerializedList(Dataset):
+class TorchSerializedSampleCache(Dataset):
     def __init__(self, data: list[Any]):
         payloads = [pickle.dumps(x, protocol=pickle.HIGHEST_PROTOCOL) for x in data]
         sizes = [len(x) for x in payloads]
@@ -289,7 +326,7 @@ def _build_cached_torch(paths: list[Path], *, sleep_ms: int) -> BuildResult:
 def _build_cached_torch_serialize(paths: list[Path], *, sleep_ms: int) -> BuildResult:
     t0 = time.perf_counter()
     data = [_read_sample_file(path, sleep_ms=sleep_ms) for path in paths]
-    ds = TorchSerializedList(data)
+    ds = TorchSerializedSampleCache(data)
     return BuildResult(ds, time.perf_counter() - t0)
 
 
@@ -310,6 +347,8 @@ def main():
     ap.add_argument("--context", type=str, default="spawn")
     ap.add_argument("--sleep-ms", type=int, default=0)
     args = ap.parse_args()
+    if int(args.samples) < int(args.warmup) + int(args.measure):
+        raise SystemExit("--samples must be at least warmup + measure")
 
     tmpdir = Path(tempfile.mkdtemp(prefix="oxidata-source-bench-"))
     try:
@@ -321,9 +360,15 @@ def main():
 
         built = []
         built.append(("streaming_torch_files", BuildResult(StreamingTorchFileDataset(paths, sleep_ms=int(args.sleep_ms)), 0.0)))
+        built.append(
+            (
+                "streaming_torch_serialized_index",
+                BuildResult(StreamingTorchSerializedIndexDataset(paths, sleep_ms=int(args.sleep_ms)), 0.0),
+            )
+        )
         built.append(("python_list_cache", _build_cached_python(paths, sleep_ms=int(args.sleep_ms))))
         built.append(("torch_tensors_cache", _build_cached_torch(paths, sleep_ms=int(args.sleep_ms))))
-        built.append(("torch_serialize_cache", _build_cached_torch_serialize(paths, sleep_ms=int(args.sleep_ms))))
+        built.append(("torch_serialize_full_cache", _build_cached_torch_serialize(paths, sleep_ms=int(args.sleep_ms))))
         built.append(("oxidata_descriptors_cache", _build_cached_oxidata(paths, sleep_ms=int(args.sleep_ms))))
 
         print(
@@ -357,7 +402,10 @@ def main():
 
         print()
         print("Metric note: macOS `vmmap` physical footprint is used per process. Summed worker+parent footprint is still an approximation.")
-        print("Build note: cached methods include a one-time ingest/build stage from files; `streaming_torch_files` does not.")
+        print(
+            "Build note: cached methods include a one-time ingest/build stage from files; "
+            "`streaming_torch_files` and `streaming_torch_serialized_index` do not."
+        )
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 

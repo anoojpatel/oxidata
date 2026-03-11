@@ -1,6 +1,7 @@
 import argparse
 import multiprocessing as mp
 import os
+import pickle
 import re
 import shutil
 import subprocess
@@ -111,6 +112,43 @@ class StreamingTorchFileDataset(Dataset):
         return _tree_numpy_to_torch(_read_sample_file(self.paths[int(idx)], sleep_ms=self.sleep_ms))
 
 
+class TorchSerializedList:
+    """Faithful to the blog/detectron2 trick: store pickled entries in one torch byte tensor."""
+
+    def __init__(self, items: list[Any]):
+        payloads = [np.frombuffer(pickle.dumps(x, protocol=pickle.HIGHEST_PROTOCOL), dtype=np.uint8) for x in items]
+        self._addr = torch.from_numpy(np.cumsum(np.asarray([len(x) for x in payloads], dtype=np.int64)))
+        self._blob = torch.from_numpy(np.concatenate(payloads))
+
+    def __len__(self) -> int:
+        return int(self._addr.numel())
+
+    def __getitem__(self, idx: int) -> Any:
+        idx = int(idx)
+        start = 0 if idx == 0 else int(self._addr[idx - 1].item())
+        end = int(self._addr[idx].item())
+        return pickle.loads(memoryview(self._blob[start:end].numpy()))
+
+
+class StreamingTorchSerializedIndexDataset(Dataset):
+    """
+    Closer to the blog's intended use: only share the source index/metadata structure
+    through torch serialization, then read the real payload in workers.
+    """
+
+    def __init__(self, paths: list[Path], *, sleep_ms: int):
+        self.records = TorchSerializedList([{"path": str(p), "sample_id": i} for i, p in enumerate(paths)])
+        self.sleep_ms = int(sleep_ms)
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, idx: int) -> Any:
+        record = self.records[int(idx)]
+        sample = _read_sample_file(Path(record["path"]), sleep_ms=self.sleep_ms)
+        return _tree_numpy_to_torch(sample)
+
+
 @dataclass
 class BenchResult:
     method: str
@@ -122,13 +160,19 @@ class BenchResult:
 def _run_torch_streaming(
     paths: list[Path],
     *,
+    method: str,
+    serialized_index: bool,
     num_workers: int,
     warmup: int,
     measure: int,
     sleep_ms: int,
     multiprocessing_context: str,
 ) -> BenchResult:
-    ds = StreamingTorchFileDataset(paths, sleep_ms=sleep_ms)
+    ds = (
+        StreamingTorchSerializedIndexDataset(paths, sleep_ms=sleep_ms)
+        if serialized_index
+        else StreamingTorchFileDataset(paths, sleep_ms=sleep_ms)
+    )
     loader = DataLoader(
         ds,
         batch_size=1,
@@ -152,7 +196,7 @@ def _run_torch_streaming(
         print("impossible")
     del it
     del loader
-    return BenchResult("streaming_torch_files", measure / dt, parent_fp, workers_fp)
+    return BenchResult(method, measure / dt, parent_fp, workers_fp)
 
 
 def _oxidata_worker(
@@ -308,10 +352,12 @@ def main():
     ap.add_argument(
         "--methods",
         nargs="+",
-        choices=("streaming_torch_files", "oxidata_streaming"),
-        default=("streaming_torch_files", "oxidata_streaming"),
+        choices=("streaming_torch_files", "streaming_torch_serialized_index", "oxidata_streaming"),
+        default=("streaming_torch_files", "streaming_torch_serialized_index", "oxidata_streaming"),
     )
     args = ap.parse_args()
+    if int(args.samples) < int(args.warmup) + int(args.measure):
+        raise SystemExit("--samples must be at least warmup + measure")
 
     tmpdir = Path(tempfile.mkdtemp(prefix="oxidata-e2e-bench-"))
     try:
@@ -333,6 +379,19 @@ def main():
             if method == "streaming_torch_files":
                 res = _run_torch_streaming(
                     paths,
+                    method=method,
+                    serialized_index=False,
+                    num_workers=int(args.workers),
+                    warmup=int(args.warmup),
+                    measure=int(args.measure),
+                    sleep_ms=int(args.sleep_ms),
+                    multiprocessing_context=str(args.context),
+                )
+            elif method == "streaming_torch_serialized_index":
+                res = _run_torch_streaming(
+                    paths,
+                    method=method,
+                    serialized_index=True,
                     num_workers=int(args.workers),
                     warmup=int(args.warmup),
                     measure=int(args.measure),
