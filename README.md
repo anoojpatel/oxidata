@@ -258,6 +258,21 @@ Metric caveat:
 - This benchmark uses per-process macOS `vmmap` physical footprint.
 - Summed parent + worker footprint is still an approximation, not Linux-style `PSS`.
 
+### ppwwyyxx context
+
+The benchmark names that contain `torch_serialize` or `streaming_torch_serialized_index` are motivated by Yuxin Wu's write-up, "Demystify RAM Usage in Multi-Process Data Loaders":
+
+- Blog: <https://ppwwyyxx.com/blog/2022/Demystify-RAM-Usage-in-Multiprocess-DataLoader/>
+- Example code: <https://github.com/ppwwyyxx/RAM-multiprocess-dataloader/blob/main/main-torchserialize.py>
+
+The core point of that write-up is:
+
+- naive Python datasets often store metadata as large nested Python object graphs
+- multiprocessing can replicate or heavily bloat that memory footprint because Python object access carries refcount traffic and serialization overhead
+- one practical fix is to pack dataset entries into a compact serialized buffer with very few Python objects, then deserialize per item when accessed
+
+In other words, the ppwwyyxx approach is mainly a dataset/index-sharing optimization. It is excellent for avoiding RAM blowups from large in-memory Python metadata structures under multiprocessing. It does not, by itself, change the later transport cost of moving a fully materialized large sample from worker to trainer once the worker has already read and decoded the real payload.
+
 ### File-backed / object-store-like source benchmark
 
 `benchmarks/bench_dataloader_source_pipeline.py` adds file IO and optional synthetic source latency. It compares:

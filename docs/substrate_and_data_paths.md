@@ -486,6 +486,34 @@ Interpretation:
 - under `spawn`, representation choice matters much more
 - the main motivation for this substrate is the non-`fork` setting, not trying to beat `fork` on its natural memory-sharing path
 
+## 9.1 ppwwyyxx context
+
+The `torch_serialize_full` and `streaming_torch_serialized_index` baselines are motivated by Yuxin Wu's write-up on multiprocessing DataLoader RAM behavior:
+
+- Blog: <https://ppwwyyxx.com/blog/2022/Demystify-RAM-Usage-in-Multiprocess-DataLoader/>
+- Example code: <https://github.com/ppwwyyxx/RAM-multiprocess-dataloader/blob/main/main-torchserialize.py>
+
+What that approach is trying to fix:
+
+- large dataset metadata often lives as many Python objects
+- multiprocessing can make that representation expensive in RAM because object graphs serialize poorly and refcount-heavy access patterns defeat sharing
+- packing entries into a compact serialized buffer with torch-backed storage sharply reduces the number of live Python objects
+
+What it does well:
+
+- it is a strong fix for the dataset/index representation problem under multiprocessing
+- it is especially relevant when the dataset is mostly metadata, paths, annotations, or other modest-sized records
+
+What it does not solve:
+
+- once a worker has read and materialized the real sample payload, the fully materialized sample still has to cross the process boundary
+- for very large tensor payloads, that worker-to-trainer transport cost becomes the next bottleneck
+
+That is why this repo separates two torch-serialize-style baselines:
+
+- `streaming_torch_serialized_index`: closest to the blog's intended pattern, where only index/metadata is compacted
+- `torch_serialize_full`: a harsher baseline that serializes the whole sample payload and is therefore not the main pattern the blog is advocating
+
 ## 10. File-backed / object-store-like source benchmark
 
 `benchmarks/bench_dataloader_source_pipeline.py` adds a more realistic source stage:
