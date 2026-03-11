@@ -211,6 +211,142 @@ Other benchmark results on the same machine:
 
 - `benchmarks/bench_native_ringbuffer.py`: `322946 msg/s`
 - `benchmarks/bench_blob_vs_pickle.py`: `pickle 0.0044s`, `shm+json 0.0208s`, `shm+msgspec 0.0081s` for `200` iterations
+- `benchmarks/bench_dataloader_source_pipeline.py`: file-backed/object-store-like benchmark with optional per-sample sleep, comparing streaming file reads against cached spawn-safe representations
+
+### Spawn DataLoader memory/speed benchmark
+
+`benchmarks/bench_dataloader_spawn_memory.py` compares dataset representations under `torch.utils.data.DataLoader(..., multiprocessing_context="spawn")`:
+
+- `python_list`: plain Python list of nested NumPy samples
+- `torch_tensors`: nested torch tensors stored directly in the dataset
+- `torch_serialize`: serialized list stored in torch `uint8` tensor storage
+- `oxidata_descriptors`: Oxidata-style small Python descriptors pointing at shared-memory NumPy leaves
+
+Measured on the same M1 Pro MacBook Pro with:
+
+- `32` samples
+- `4 MiB` per sample
+- `4` workers
+- `8` warmup samples
+- `16` measured samples
+
+| Method | Samples/s | Parent footprint | Workers footprint | Total footprint |
+|---|---:|---:|---:|---:|
+| `python_list` | 450.06 | 0.96 GiB | 1.11 GiB | 2.07 GiB |
+| `torch_tensors` | 5175.13 | 1.10 GiB | 0.57 GiB | 1.67 GiB |
+| `torch_serialize` | 360.30 | 1.10 GiB | 0.68 GiB | 1.78 GiB |
+| `oxidata_descriptors` | 557.90 | 1.00 GiB | 0.65 GiB | 1.65 GiB |
+
+Interpretation:
+
+- `python_list` shows the worst combined memory footprint in this spawn setting.
+- `torch_tensors` is the strongest baseline here on both speed and footprint.
+- `torch_serialize` reduces worker footprint relative to `python_list`, but it still pays decode cost.
+- `oxidata_descriptors` is close to the torch-sharing memory story while keeping the transport shape explicit and tensor-oriented.
+
+Metric caveat:
+
+- This benchmark uses per-process macOS `vmmap` physical footprint.
+- Summed parent + worker footprint is still an approximation, not Linux-style `PSS`.
+
+### File-backed / object-store-like source benchmark
+
+`benchmarks/bench_dataloader_source_pipeline.py` adds file IO and optional synthetic source latency. It compares:
+
+- `streaming_torch_files`: read sample files on demand and convert to torch in workers
+- `python_list_cache`: ingest all files into Python objects up front
+- `torch_tensors_cache`: ingest all files into torch-backed storage up front
+- `torch_serialize_cache`: ingest all files into torch-backed serialized storage up front
+- `oxidata_descriptors_cache`: ingest all files into Oxidata shared-memory descriptors up front
+
+Representative run on this machine:
+
+- `32` samples
+- `4 MiB` per sample
+- `4` workers
+- `8` warmup
+- `16` measured
+- `spawn`
+- `10 ms` synthetic source latency per sample
+
+| Method | Build time | Samples/s | Parent footprint | Workers footprint | Total footprint |
+|---|---:|---:|---:|---:|---:|
+| `streaming_torch_files` | 0.00 s | 313.18 | 0.92 GiB | 0.63 GiB | 1.55 GiB |
+| `python_list_cache` | 1.01 s | 338.16 | 0.91 GiB | 1.11 GiB | 2.02 GiB |
+| `torch_tensors_cache` | 0.55 s | 5286.20 | 0.82 GiB | 0.57 GiB | 1.40 GiB |
+| `torch_serialize_cache` | 0.63 s | 232.42 | 0.91 GiB | 0.69 GiB | 1.60 GiB |
+| `oxidata_descriptors_cache` | 0.64 s | 513.73 | 0.92 GiB | 0.65 GiB | 1.58 GiB |
+
+Interpretation:
+
+- `torch_tensors_cache` remains the strongest baseline when you can afford full upfront conversion into torch storage.
+- `oxidata_descriptors_cache` is much closer to the shared-storage memory story than `python_list_cache`.
+- `streaming_torch_files` avoids the upfront ingest/build cost, but throughput is then bounded by source latency and per-sample reconstruction.
+- `torch_serialize_cache` remains decode-heavy.
+
+### End-to-end streaming benchmark
+
+`benchmarks/bench_end_to_end_streaming.py` measures the full source-to-main-process path instead of a cached representation:
+
+- sample files are read in worker processes
+- `--sleep-ms` can simulate object-store/network latency
+- `streaming_torch_files` returns torch-native samples from workers
+- `oxidata_streaming` writes leaves into bounded shared-memory payload slots and sends only descriptors back
+
+Representative run on this machine:
+
+- `32` samples
+- `4 MiB` per sample
+- `4` workers
+- `8` warmup
+- `16` measured
+- `spawn`
+- `10 ms` synthetic source latency per sample
+- `payload_slot_mib=8`
+- `inflight_slots=16`
+- `oxidata_stage_torch=True`
+
+| Method | Samples/s | Parent footprint | Workers footprint | Total footprint |
+|---|---:|---:|---:|---:|
+| `streaming_torch_files` | 111.94 | 0.16 GiB | 0.64 GiB | 0.80 GiB |
+| `oxidata_streaming` | 347.11 | 0.16 GiB | 0.69 GiB | 0.85 GiB |
+
+Interpretation:
+
+- this is the benchmark closest to the actual reason the library exists: source IO in workers, cross-process transport, and reconstruction in the training process
+- `streaming_torch_files` must move the fully materialized sample through PyTorch's multiprocessing path on every item
+- `oxidata_streaming` keeps bulk data in explicit shared memory and sends only descriptors across the process boundary
+- the benchmark keeps only a bounded amount of work in flight so the measurement reflects steady-state transport rather than precomputed backlog
+- the memory footprints stay close, but the transport story is materially different once the benchmark includes the real source stage
+
+Scaling sweep on the same machine (`32` samples, `4` workers, `8` measured samples):
+
+| Sample size | `python_list` total footprint / samples/s | `torch_tensors` total footprint / samples/s | `torch_serialize` total footprint / samples/s | `oxidata_descriptors` total footprint / samples/s |
+|---|---:|---:|---:|---:|
+| 1 MiB | 1.17 GiB / 1088.02 | 1.03 GiB / 3265.69 | 0.98 GiB / 1082.63 | 0.91 GiB / 1019.88 |
+| 4 MiB | 2.12 GiB / 368.42 | 1.67 GiB / 3601.51 | 1.67 GiB / 353.16 | 1.53 GiB / 348.09 |
+| 8 MiB | 3.65 GiB / 156.71 | 1.87 GiB / 5135.89 | 2.38 GiB / 139.84 | 2.40 GiB / 185.43 |
+| 16 MiB | 6.00 GiB / 102.24 | 3.28 GiB / 4878.67 | 4.19 GiB / 89.55 | 4.12 GiB / 88.24 |
+
+Pressure takeaway:
+
+- `python_list` scales worst in combined footprint as sample size rises.
+- `torch_tensors` remains the strongest baseline when the dataset can be pre-materialized as torch storage.
+- `oxidata_descriptors` stays much closer to the shared-storage baselines than the plain Python representation.
+- `torch_serialize` reduces memory pressure relative to `python_list`, but decode cost becomes more visible as samples grow.
+
+`fork` contrast on the same `32` samples x `4 MiB`, `4` workers, `16` measured configuration:
+
+| Context | `python_list` total footprint | `torch_tensors` total footprint | `torch_serialize` total footprint | `oxidata_descriptors` total footprint |
+|---|---:|---:|---:|---:|
+| `spawn` | 2.12 GiB | 1.67 GiB | 1.78 GiB | 1.53 GiB |
+| `fork` | 0.97 GiB | 0.99 GiB | 0.99 GiB | 0.96 GiB |
+
+Why this matters:
+
+- under `fork`, copy-on-write already removes most of the memory blowup, so all four methods converge much more closely
+- under `spawn`, explicit shared-storage approaches matter much more
+- this project is primarily targeting the non-`fork` case, where plain Python objects scale poorly
 
 ### Example: scoped off-heap bytes with `Frame`
 
